@@ -1,0 +1,589 @@
+lib/
+├─ main.dart
+├─ models/
+│  ├─ business_info.dart
+│  ├─ client.dart
+│  ├─ product.dart
+│  ├─ invoice.dart
+│  ├─ invoice_item.dart
+├─ db/
+│  ├─ database_helper.dart
+├─ providers/
+│  ├─ invoice_provider.dart
+├─ pdf/
+│  ├─ invoice_pdf.dart
+├─ screens/
+│  ├─ splash_screen.dart
+│  ├─ home_screen.dart
+│  ├─ add_client_screen.dart
+│  ├─ add_product_screen.dart
+│  ├─ create_invoice_screen.dart
+│  ├─ view_pdf_screen.dart
+│  ├─ my_info_screen.dart
+├─ home.dart
+
+
+
+main
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'screens/splash_screen.dart';
+import 'providers/invoice_provider.dart';
+
+void main() {
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => InvoiceProvider(),
+      child: const MyApp(),
+    ),
+  );
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'GST Billing',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(primarySwatch: Colors.indigo),
+      home: const SplashScreen(),
+    );
+  }
+}
+
+Models (copy each file exactly)
+lib/models/client.dart
+
+class Client {
+  int? id;
+  final String name, gstNo, address, phone;
+  Client({this.id, required this.name, required this.gstNo,
+          required this.address, required this.phone});
+  Map<String, dynamic> toMap() => {
+    'id': id, 'name': name, 'gstNo': gstNo,
+    'address': address, 'phone': phone
+  };
+  factory Client.fromMap(Map<String, dynamic> m) => Client(
+      id: m['id'], name: m['name'], gstNo: m['gstNo'],
+      address: m['address'], phone: m['phone']);
+}
+
+lib/models/product.dart
+class Product {
+  int? id;
+  final String name;
+  final double rate, gstRate;
+  Product({this.id, required this.name,
+           required this.rate, required this.gstRate});
+  Map<String, dynamic> toMap() => {
+    'id': id, 'name': name, 'rate': rate, 'gstRate': gstRate
+  };
+  factory Product.fromMap(Map<String, dynamic> m) => Product(
+      id: m['id'], name: m['name'],
+      rate: m['rate'], gstRate: m['gstRate']);
+}
+
+
+lib/models/invoice_item.dart
+class InvoiceItem {
+  final String productName;
+  final int qty;
+  final double rate, gstRate;
+  InvoiceItem({
+    required this.productName,
+    required this.qty,
+    required this.rate,
+    required this.gstRate,
+  });
+  double get total =>
+      qty * rate * (1 + gstRate / 100);
+}
+
+lib/models/invoice.dart
+class Invoice {
+  int? id;
+  final int clientId;
+  final String date;
+  final double totalAmount, gstAmount;
+  final String? pdfPath;
+  Invoice({
+    this.id,
+    required this.clientId,
+    required this.date,
+    required this.totalAmount,
+    required this.gstAmount,
+    this.pdfPath,
+  });
+  Map<String, dynamic> toMap() => {
+    'id': id, 'clientId': clientId, 'date': date,
+    'totalAmount': totalAmount, 'gstAmount': gstAmount,
+    'pdfPath': pdfPath
+  };
+  factory Invoice.fromMap(Map<String, dynamic> m) => Invoice(
+      id: m['id'],
+      clientId: m['clientId'],
+      date: m['date'],
+      totalAmount: m['totalAmount'],
+      gstAmount: m['gstAmount'],
+      pdfPath: m['pdfPath']);
+}
+
+
+SQLite helper (lib/db/database_helper.dart)
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
+import '../models/client.dart';
+import '../models/product.dart';
+import '../models/invoice.dart';
+
+class DatabaseHelper {
+  static final DatabaseHelper instance = DatabaseHelper._init();
+  static Database? _database;
+  DatabaseHelper._init();
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDB('gst_billing.db');
+    return _database!;
+  }
+
+  Future<Database> _initDB(String filePath) async {
+    final dbPath = await getDatabasesPath();
+    final path = join(dbPath, filePath);
+    return await openDatabase(path, version: 1, onCreate: _createDB);
+  }
+
+  Future _createDB(Database db, int version) async {
+    await db.execute('''
+      CREATE TABLE clients(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        gstNo TEXT,
+        address TEXT,
+        phone TEXT)
+    ''');
+    await db.execute('''
+      CREATE TABLE products(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        rate REAL,
+        gstRate REAL)
+    ''');
+    await db.execute('''
+      CREATE TABLE invoices(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        clientId INTEGER,
+        date TEXT,
+        totalAmount REAL,
+        gstAmount REAL,
+        pdfPath TEXT)
+    ''');
+  }
+
+  /* ---------- CLIENT ---------- */
+  Future<int> insertClient(Client c) async {
+    final db = await instance.database;
+    return await db.insert('clients', c.toMap());
+  }
+  Future<List<Client>> getClients() async {
+    final db = await instance.database;
+    final res = await db.query('clients', orderBy: 'name');
+    return res.map((e) => Client.fromMap(e)).toList();
+  }
+
+  /* ---------- PRODUCT ---------- */
+  Future<int> insertProduct(Product p) async {
+    final db = await instance.database;
+    return await db.insert('products', p.toMap());
+  }
+  Future<List<Product>> getProducts() async {
+    final db = await instance.database;
+    final res = await db.query('products', orderBy: 'name');
+    return res.map((e) => Product.fromMap(e)).toList();
+  }
+
+  /* ---------- INVOICE ---------- */
+  Future<int> insertInvoice(Invoice inv) async {
+    final db = await instance.database;
+    return await db.insert('invoices', inv.toMap());
+  }
+  Future<List<Invoice>> getInvoices() async {
+    final db = await instance.database;
+    final res = await db.query('invoices', orderBy: 'id DESC');
+    return res.map((e) => Invoice.fromMap(e)).toList();
+  }
+  Future close() async {
+    final db = await instance.database;
+    db.close();
+  }
+}
+
+PDF generator (lib/pdf/invoice_pdf.dart)
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import '../models/client.dart';
+import '../models/invoice_item.dart';
+
+Future<Uint8List> generateInvoicePDF({
+  required Client client,
+  required List<InvoiceItem> items,
+  required double gst,
+  required double total,
+}) async {
+  final pdf = pw.Document();
+  final font = await PdfGoogleFonts.robotoRegular();
+  final bold = await PdfGoogleFonts.robotoBold();
+  final logoBytes = await rootBundle.load('assets/logo.png');
+  final logo = pw.MemoryImage(logoBytes.buffer.asUint8List());
+
+  pdf.addPage(pw.MultiPage(
+    pageFormat: PdfPageFormat.a4,
+    build: (context) => [
+      pw.Row(children: [
+        pw.Image(logo, width: 80),
+        pw.SizedBox(width: 20),
+        pw.Text('TAX INVOICE',
+            style: pw.TextStyle(font: bold, fontSize: 22))
+      ]),
+      pw.SizedBox(height: 20),
+      pw.Text('Client: ${client.name}', style: pw.TextStyle(font: font)),
+      pw.Text('GSTIN: ${client.gstNo}', style: pw.TextStyle(font: font)),
+      pw.Text('Address: ${client.address}', style: pw.TextStyle(font: font)),
+      pw.SizedBox(height: 20),
+      pw.Table.fromTextArray(
+        headers: ['Product', 'Qty', 'Rate', 'GST%', 'Total'],
+        data: items.map((i) => [
+          i.productName,
+          i.qty.toString(),
+          i.rate.toStringAsFixed(2),
+          i.gstRate.toStringAsFixed(2),
+          (i.qty * i.rate * (1 + i.gstRate / 100)).toStringAsFixed(2)
+        ]).toList(),
+        headerStyle: pw.TextStyle(font: bold),
+        cellStyle: pw.TextStyle(font: font),
+      ),
+      pw.SizedBox(height: 20),
+      pw.Text('Sub-Total: ₹${total.toStringAsFixed(2)}',
+          style: pw.TextStyle(font: bold)),
+      pw.Text('GST-Amount: ₹${gst.toStringAsFixed(2)}',
+          style: pw.TextStyle(font: bold)),
+      pw.Text('Grand Total: ₹${(total + gst).toStringAsFixed(2)}',
+          style: pw.TextStyle(font: bold, fontSize: 18)),
+    ],
+  ));
+  return pdf.save();
+}
+
+Screens (copy each file)
+lib/screens/splash_screen.dart
+import 'package:flutter/material.dart';
+import 'home_screen.dart';
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(seconds: 2), () {
+      Navigator.pushReplacement(context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()));
+    });
+  }
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Colors.indigo,
+      body: Center(
+          child: Text('GST Billing App',
+              style: TextStyle(color: Colors.white, fontSize: 28))),
+    );
+  }
+}
+
+
+lib/screens/home_screen.dart
+
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/invoice_provider.dart';
+import 'add_client_screen.dart';
+import 'add_product_screen.dart';
+import 'create_invoice_screen.dart';
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final prov = Provider.of<InvoiceProvider>(context);
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Dashboard'),
+            bottom: const TabBar(tabs: [
+              Tab(text: 'Clients'),
+              Tab(text: 'Products'),
+              Tab(text: 'Invoices')
+            ])),
+        floatingActionButton: FloatingActionButton(
+          onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const CreateInvoiceScreen())),
+          child: const Icon(Icons.add),
+        ),
+        body: TabBarView(children: [
+          // Clients
+          FutureBuilder(
+              future: prov.loadClients(),
+              builder: (_, __) => ListView.builder(
+                  itemCount: prov.clients.length,
+                  itemBuilder: (_, i) =>
+                      ListTile(title: Text(prov.clients[i].name)))),
+          // Products
+          FutureBuilder(
+              future: prov.loadProducts(),
+              builder: (_, __) => ListView.builder(
+                  itemCount: prov.products.length,
+                  itemBuilder: (_, i) =>
+                      ListTile(title: Text(prov.products[i].name)))),
+          // Invoices
+          FutureBuilder(
+              future: prov.loadInvoices(),
+              builder: (_, __) => ListView.builder(
+                  itemCount: prov.invoices.length,
+                  itemBuilder: (_, i) => ListTile(
+                      title: Text('Inv #${prov.invoices[i].id}'),
+                      subtitle: Text(prov.invoices[i].date)))),
+        ]),
+      ),
+    );
+  }
+}
+
+lib/screens/add_client_screen.dart
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/client.dart';
+import '../providers/invoice_provider.dart';
+
+class AddClientScreen extends StatefulWidget {
+  const AddClientScreen({super.key});
+  @override
+  State<AddClientScreen> createState() => _AddClientScreenState();
+}
+class _AddClientScreenState extends State<AddClientScreen> {
+  final _name = TextEditingController(),
+      _gst = TextEditingController(),
+      _addr = TextEditingController(),
+      _phone = TextEditingController();
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add Client')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name')),
+          TextField(controller: _gst, decoration: const InputDecoration(labelText: 'GSTIN')),
+          TextField(controller: _addr, decoration: const InputDecoration(labelText: 'Address')),
+          TextField(controller: _phone, decoration: const InputDecoration(labelText: 'Phone')),
+          const SizedBox(height: 20),
+          ElevatedButton(
+              onPressed: () {
+                final c = Client(
+                    name: _name.text,
+                    gstNo: _gst.text,
+                    address: _addr.text,
+                    phone: _phone.text);
+                Provider.of<InvoiceProvider>(context, listen: false)
+                    .addClient(c)
+                    .then((_) => Navigator.pop(context));
+              },
+              child: const Text('SAVE'))
+        ]),
+      ),
+    );
+  }
+}
+
+
+lib/screens/add_product_screen.dart
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/product.dart';
+import '../providers/invoice_provider.dart';
+
+class AddProductScreen extends StatefulWidget {
+  const AddProductScreen({super.key});
+  @override
+  State<AddProductScreen> createState() => _AddProductScreenState();
+}
+class _AddProductScreenState extends State<AddProductScreen> {
+  final _name = TextEditingController(),
+      _rate = TextEditingController(),
+      _gst = TextEditingController();
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add Product')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          TextField(controller: _name, decoration: const InputDecoration(labelText: 'Product Name')),
+          TextField(controller: _rate,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Rate ₹')),
+          TextField(controller: _gst,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'GST %')),
+          const SizedBox(height: 20),
+          ElevatedButton(
+              onPressed: () {
+                final p = Product(
+                    name: _name.text,
+                    rate: double.parse(_rate.text),
+                    gstRate: double.parse(_gst.text));
+                Provider.of<InvoiceProvider>(context, listen: false)
+                    .addProduct(p)
+                    .then((_) => Navigator.pop(context));
+              },
+              child: const Text('SAVE'))
+        ]),
+      ),
+    );
+  }
+}
+
+
+lib/screens/create_invoice_screen.dart
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:path_provider/path_provider.dart';
+import '../models/client.dart';
+import '../models/product.dart';
+import '../models/invoice.dart';
+import '../models/invoice_item.dart';
+import '../providers/invoice_provider.dart';
+import '../pdf/invoice_pdf.dart';
+import 'view_pdf_screen.dart';
+
+class CreateInvoiceScreen extends StatefulWidget {
+  const CreateInvoiceScreen({super.key});
+  @override
+  State<CreateInvoiceScreen> createState() => _CreateInvoiceScreenState();
+}
+class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
+  Client? selectedClient;
+  final List<InvoiceItem> items = [];
+  @override
+  Widget build(BuildContext context) {
+    final prov = Provider.of<InvoiceProvider>(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create Invoice')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          DropdownButton<Client>(
+              hint: const Text('Select Client'),
+              value: selectedClient,
+              items: prov.clients
+                  .map((c) => DropdownMenuItem(
+                      value: c, child: Text(c.name)))
+                  .toList(),
+              onChanged: (c) => setState(() => selectedClient = c)),
+          DropdownButton<Product>(
+              hint: const Text('Add Product'),
+              items: prov.products
+                  .map((p) => DropdownMenuItem(
+                      value: p, child: Text(p.name)))
+                  .toList(),
+              onChanged: (p) {
+                if (p == null) return;
+                setState(() => items.add(InvoiceItem(
+                    productName: p.name,
+                    qty: 1,
+                    rate: p.rate,
+                    gstRate: p.gstRate)));
+              }),
+          Expanded(
+              child: ListView.builder(
+                  itemCount: items.length,
+                  itemBuilder: (_, i) => ListTile(
+                      title: Text(items[i].productName),
+                      subtitle: Text(
+                          'Qty ${items[i].qty}  Rate ₹${items[i].rate}  GST ${items[i].gstRate}%'),
+                      trailing: Text('₹${items[i].total.toStringAsFixed(2)}')))),
+          const Divider(),
+          Text('Sub-total: ₹${prov.calculateTotal(items).toStringAsFixed(2)}'),
+          Text('GST: ₹${prov.calculateGST(items).toStringAsFixed(2)}'),
+          Text('Grand: ₹${(prov.calculateTotal(items) + prov.calculateGST(items)).toStringAsFixed(2)}',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+              icon: const Icon(Icons.picture_as_pdf),
+              label: const Text('GENERATE PDF'),
+              onPressed: () async {
+                if (selectedClient == null || items.isEmpty) return;
+                final gst = prov.calculateGST(items);
+                final total = prov.calculateTotal(items);
+                final pdfBytes = await generateInvoicePDF(
+                    client: selectedClient!,
+                    items: items,
+                    gst: gst,
+                    total: total);
+                final dir = await getApplicationDocumentsDirectory();
+                final file = File('${dir.path}/inv_${DateTime.now().millisecond}.pdf');
+                await file.writeAsBytes(pdfBytes);
+                final inv = Invoice(
+                    clientId: selectedClient!.id!,
+                    date: DateFormat('dd-MM-yyyy').format(DateTime.now()),
+                    totalAmount: total,
+                    gstAmount: gst,
+                    pdfPath: file.path);
+                await prov.saveInvoice(inv);
+                if (!mounted) return;
+                Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => ViewPdfScreen(path: file.path)));
+              })
+        ]),
+      ),
+    );
+  }
+}
+
+
+lib/screens/view_pdf_screen.dart
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:printing/printing.dart';
+
+class ViewPdfScreen extends StatelessWidget {
+  final String path;
+  const ViewPdfScreen({super.key, required this.path});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Invoice PDF')),
+      body: PdfPreview(
+        build: (format) => File(path).readAsBytes(),
+        allowSharing: true,
+        allowPrinting: true,
+      ),
+    );
+  }
+}
+
+
